@@ -7,11 +7,10 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# Load model and data
 model = joblib.load('aissmspricemodel.pkl')
 raw_data = pd.read_csv('EngineeredData.csv')
 
-# Define the expected column order
+# expected column order
 EXPECTED_FEATURE_ORDER = [
     'Market',
     'Arrivals (Tonnes)',
@@ -43,22 +42,20 @@ def engineer_features(market, variety):
     if historical_data.empty:
         raise ValueError(f"No historical data found for {market} - {variety}")
         
-    # Sort by date to ensure correct temporal order
+    # correct order
     historical_data['Arrival Date'] = pd.to_datetime(historical_data['Arrival Date'])
     historical_data = historical_data.sort_values('Arrival Date')
-    
-    # Get the latest values for feature initialization
+
     latest_data = historical_data.iloc[-1].copy()
     latest_date = historical_data['Arrival Date'].max()
     
-    # Calculate rolling statistics first
     prices = historical_data['Minimum Price(Rs./Quintal)']
     rolling_stats = {}
     for window in [7, 14, 30]:
         rolling_stats[f'Rolling_Mean_{window}'] = prices.tail(window).mean()
         rolling_stats[f'Rolling_Std_{window}'] = prices.tail(window).std()
     
-    # Initialize all features in the expected order
+
     features = {
         'Market': market,
         'Arrivals (Tonnes)': latest_data['Arrivals (Tonnes)'],
@@ -85,7 +82,7 @@ def engineer_features(market, variety):
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
-        # Get request data
+        
         data = request.get_json()
         
         if not data:
@@ -102,7 +99,6 @@ def predict():
         if n_days < 1:
             return jsonify({'error': 'Number of days must be positive'}), 400
         
-        # Engineer initial features
         try:
             current_features = engineer_features(market, variety)
         except ValueError as e:
@@ -110,7 +106,6 @@ def predict():
         except Exception as e:
             return jsonify({'error': f'Error engineering features: {str(e)}'}), 500
         
-        # Initialize rolling windows
         historical_data = raw_data[
             (raw_data['Market'] == market) & 
             (raw_data['Variety'] == variety)
@@ -118,7 +113,6 @@ def predict():
         prices = historical_data['Minimum Price(Rs./Quintal)'].tail(30).tolist()
         arrivals = deque(historical_data['Arrivals (Tonnes)'].tail(3).tolist(), maxlen=3)
         
-        # Make predictions
         predictions = []
         dates = []
         current_date = datetime.strptime(
@@ -127,27 +121,23 @@ def predict():
         )
         
         for i in range(n_days):
-            # Update date for next prediction
-            current_date += timedelta(days=1)
             
-            # Update date-related features
+            current_date += timedelta(days=1)
             current_features['Year'] = current_date.year
             current_features['Month'] = current_date.month
             current_features['Day'] = current_date.day
             current_features['Quarter'] = (current_date.month - 1) // 3 + 1
             current_features['DayOfWeek'] = current_date.weekday()
             
-            # Create DataFrame for prediction with correct column order
             df = pd.DataFrame([current_features])[EXPECTED_FEATURE_ORDER]
             df['Market'] = df['Market'].astype('category')
             df['Variety'] = df['Variety'].astype('category')
             
-            # Make prediction
             price = float(model.predict(df)[0])
             predictions.append(round(price, 2))
             dates.append(current_date.strftime('%Y-%m-%d'))
             
-            # Update features for next prediction
+            # Update features
             current_features['Lag_3'] = current_features['Lag_2']
             current_features['Lag_2'] = current_features['Lag_1']
             current_features['Lag_1'] = price
@@ -163,7 +153,6 @@ def predict():
             if len(prices) > 30:
                 prices.pop(0)
             
-            # Update rolling statistics
             for window in [7, 14, 30]:
                 current_features[f'Rolling_Mean_{window}'] = np.mean(prices[-window:])
                 current_features[f'Rolling_Std_{window}'] = np.std(prices[-window:])
